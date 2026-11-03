@@ -62,8 +62,13 @@ func NewService(ctx context.Context, cfg config.Config, store *database.DB, log 
 func (s *Service) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /auth/login", s.login)
 	mux.HandleFunc("GET /auth/callback", s.callback)
-	mux.HandleFunc("GET /auth/logout", s.logout)
 	mux.HandleFunc("POST /auth/logout", s.logout)
+	// Sign-out mutates state, so GET is rejected explicitly. Without this
+	// route the Git Smart HTTP catch-all (GET /) would answer 404 instead.
+	mux.HandleFunc("GET /auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	})
 	mux.HandleFunc("GET /auth/break-glass", s.breakGlass)
 	mux.HandleFunc("POST /auth/device/code", s.deviceCode)
 	mux.HandleFunc("POST /auth/device/token", s.deviceToken)

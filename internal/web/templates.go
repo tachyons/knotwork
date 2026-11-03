@@ -53,7 +53,9 @@ const baseLayout = `<!doctype html>
 {{if .Authed}}
 <a href="/repos/new" class="new-repo-link" role="button">+ New</a>
 <span class="meta">{{.User.Username}}{{if .User.IsAdmin}} · admin{{end}}</span>
-<a href="/auth/logout">Sign out</a>
+<form method="POST" action="/auth/logout" class="logout-form">
+<button type="submit" class="link-button">Sign out</button>
+</form>
 {{else}}
 <a href="/auth/login">Sign in</a>
 {{end}}
