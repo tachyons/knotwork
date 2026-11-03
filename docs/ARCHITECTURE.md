@@ -57,6 +57,28 @@ Git use, or opaque session tokens for SCIM.
 admin. SCIM uses the same bearer-token path; deactivation (`active: false` or
 `DELETE`) revokes every live session immediately.
 
+## Request pipeline
+
+Every route is wrapped once in `Server.wrap`: panic recovery, structured request
+logging, CSRF protection, then security headers. CSRF protection uses the stdlib
+`net/http.CrossOriginProtection`, which rejects unsafe methods (`POST`, `PUT`,
+`PATCH`, `DELETE`) when `Origin` or `Sec-Fetch-Site` says the request came from
+another site. Requests with neither header are non-browser clients and pass.
+
+`Cfg.BaseURL` is registered as a trusted origin so reverse proxies that rewrite
+`Host` do not break same-origin form posts. Four surfaces are exempt because
+their clients never send browser origin headers and authenticate another way:
+
+- Git Smart HTTP (`/{owner}/{repo}.git/...`), matched with
+  `gitengine.IsGitRequest`; the path cannot be expressed as a `ServeMux` pattern.
+- `/scim/v2/*` (bearer tokens).
+- `/api/mcp/*` (bearer tokens).
+- `/inbox` (HTTP signatures) and `/auth/device/{code,token}` (device flow).
+
+Sign-out is `POST /auth/logout` only; `GET` returns 405 because origin checks
+cannot cover navigation-triggered state changes. Session cookies are `HttpOnly`,
+`SameSite=Lax`, and `Secure` when `Cfg.BaseURL` is HTTPS.
+
 ## Git path
 
 Repositories are bare directories under `KNOTWORK_REPO_ROOT`, addressed as
