@@ -34,5 +34,8 @@
 .vscode/
 /.openidea/
 
+# agent task scratch
+/tasks/
+
 # harness-injected agent skills
 /skills/
