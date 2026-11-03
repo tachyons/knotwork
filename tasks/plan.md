@@ -25,17 +25,20 @@ per the owner's note on the issue.
    neither header (Git CLI, IdPs, federation peers, MCP clients).
 2. **Wrap once, in `Server.wrap`, before the router.** One choke point means every
    route added later — including the #6/#35/#36 work — inherits protection. The
-   wrapper order becomes `recoverPanic → logging → csrf → securityHeaders → mux`.
-3. **Skip non-browser surfaces with an explicit predicate, not ServeMux bypass
-   patterns.** Verified during planning: ServeMux wildcards must occupy a whole
-   segment, so `/{owner}/{repo}.git/` **panics** (`bad wildcard segment`). Git Smart
-   HTTP is registered as catch-all `GET /` + `POST /` (`internal/gitengine/smart_http.go:32`),
-   so there is no expressible bypass pattern that is not dangerously broad. Use
-   `CrossOriginProtection.Check` from our own middleware and skip via
-   `nonBrowserSurface(r)`.
-4. **Derive the skip list from routing code where possible.** Export a small
-   `gitengine.IsGitRequest(*http.Request) bool` that reuses `parseGitRequest`, so
-   the predicate cannot drift from the actual Smart HTTP routes.
+   wrapper order is `securityHeaders → logging → recoverPanic → crossOriginCheck →
+   mux`, so rejections and recovered panics still carry security headers.
+3. **No route exemptions; rely on header-less pass-through.** ServeMux wildcards
+   cannot express `/{owner}/{repo}.git/`, and every candidate exemption
+   (`/scim/v2/`, `/api/mcp/`, `/inbox`, device flow) also accepts the session
+   cookie, so a path allowlist would have skipped the check on cookie-authenticated
+   routes. `CrossOriginProtection.Check` already allows requests with neither
+   `Origin` nor `Sec-Fetch-Site`, which is exactly how git, SCIM IdPs, federation
+   peers, and MCP clients connect. *(Revised after review; an earlier revision
+   added a `nonBrowserSurface` predicate and `gitengine.IsGitRequest`.)*
+4. **Construct the trusted origin from `scheme://host` and fail at startup.** A
+   `BaseURL` with a path is rejected by `config.Load` and by the constructor, so
+   `Server.Build` returns an error instead of logging a warning and continuing
+   without the trusted origin.
 5. **Trust `Cfg.BaseURL` as an origin.** `AddTrustedOrigin(cfg.BaseURL)` keeps
    same-origin browser requests working when a reverse proxy rewrites `Host`.
 6. **Keep `Secure` cookie derivation on `Cfg.BaseURL`.** `secure()`
@@ -85,22 +88,21 @@ per the owner's note on the issue.
 ### Task 1: Add CSRF middleware and wire it into `Server.wrap`
 
 **Description:** Add `internal/web/csrf.go` containing `newCrossOriginProtection`
-(trusted origin from `Cfg.BaseURL`, warn on error via `s.Log`),
-`csrfMiddleware(cop, next)` which calls `cop.Check(r)` and skips
-`nonBrowserSurface(r)`, and the predicate itself. The deny response is the existing
-`writeError(w, 403, "cross-origin request rejected")` shape so API clients get JSON.
-Export `gitengine.IsGitRequest` as a thin wrapper over `parseGitRequest` and use it
-for the Git skip. Wire the middleware into `wrap()` between logging and security
-headers.
+(trusted origin from `Cfg.BaseURL`, returning an error on a bad URL) and
+`crossOriginCheck(cop, log, next)` which calls `cop.Check(r)` and rejects with the
+existing `writeError(w, 403, "cross-origin request rejected")` shape so API
+clients get JSON. Wire it into `wrap()` inside panic recovery, with security
+headers outermost.
 
-Skip list: Git Smart HTTP, `/scim/v2/`, `/api/mcp/`, `/inbox`,
-`/auth/device/code`, `/auth/device/token`.
+No skip list: `CrossOriginProtection.Check` already passes requests with neither
+`Origin` nor `Sec-Fetch-Site`, which covers Git Smart HTTP, SCIM, MCP, `/inbox`,
+and the device flow.
 
 **Acceptance criteria:**
 - [ ] Cross-site browser POST/PUT/DELETE/PATCH is rejected with 403 JSON
 - [ ] Same-origin browser requests are unaffected
-- [ ] Requests with neither `Origin` nor `Sec-Fetch-Site` are unaffected
-- [ ] Git Smart HTTP, SCIM, MCP, `/inbox`, and device code/token POSTs are exempt
+- [ ] Requests with neither `Origin` nor `Sec-Fetch-Site` are unaffected, so no
+  route needs an exemption
 - [ ] `GET`/`HEAD`/`OPTIONS` are never rejected
 - [ ] No new dependency; `go.mod`/`go.sum` unchanged
 
@@ -115,7 +117,6 @@ Skip list: Git Smart HTTP, `/scim/v2/`, `/api/mcp/`, `/inbox`,
 **Files likely touched:**
 - `internal/web/csrf.go` (new)
 - `internal/web/server.go`
-- `internal/gitengine/smart_http.go`
 
 **Estimated scope:** Small (3 files)
 
@@ -129,7 +130,7 @@ silently regress protection.
 
 Cases: same-origin `Origin`; cross-site `Origin`; `Sec-Fetch-Site: same-origin`;
 `Sec-Fetch-Site: cross-site`; no headers; safe method with cross-site `Origin`;
-each exempt surface with cross-site `Origin`; authenticated same-origin
+header-less pass-through on SCIM, Git, and device flow; authenticated same-origin
 `POST /api/repos` still succeeds.
 
 **Acceptance criteria:**
@@ -207,13 +208,14 @@ POST, and 403 for cross-site POST. Assert the nav no longer emits an
 ### Task 5: Document the CSRF model in SRS and ARCHITECTURE
 
 **Description:** Add a bullet to SRS §6.2 stating that browser-originated
-state-changing requests must pass same-origin validation and that exempt surfaces
-are non-browser protocols. Add the middleware chain to ARCHITECTURE's request-flow
-section, including the skip list and why Git cannot use a ServeMux bypass pattern.
+state-changing requests must pass same-origin validation and that header-less
+requests are treated as non-browser clients. Add the middleware chain to
+ARCHITECTURE's request-flow section, noting that no route is exempt because
+header-less clients pass.
 
 **Acceptance criteria:**
-- [ ] SRS §6.2 names the enforcement point and the exemptions
-- [ ] ARCHITECTURE shows `recoverPanic → logging → csrf → securityHeaders → mux`
+- [ ] SRS §6.2 names the enforcement point and the header-less pass-through rule
+- [ ] ARCHITECTURE shows `securityHeaders → logging → recoverPanic → crossOriginCheck → mux`
 - [ ] The `BaseURL` vs `X-Forwarded-Proto` decision is recorded
 
 **Verification:**
@@ -265,10 +267,9 @@ requires explicit owner permission.
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| ServeMux bypass pattern for `*.git/` is impossible (verified panic) | Med | Use `Check` + `nonBrowserSurface` predicate; `IsGitRequest` reuses routing code |
-| Proxy rewrites `Host`, blocking legitimate browser POSTs | Med | `AddTrustedOrigin(Cfg.BaseURL)`; test with `Origin` = BaseURL and `Host` = internal |
-| Exemptions silently widen over time | High | Predicate lives next to routing, is tested per surface, and is documented in ARCHITECTURE |
-| Browser-based MCP/Git clients break | Low | Non-browser clients send no headers and pass; document the `AddTrustedOrigin` path |
+| ServeMux bypass pattern for `*.git/` is impossible (verified panic) | Med | No exemptions at all: `Check` passes header-less clients, so no predicate or pattern is needed |
+| Proxy rewrites `Host`, blocking legitimate browser POSTs | Med | `AddTrustedOrigin(Cfg.BaseURL)`; tested with `Origin` = BaseURL and `Host` = internal |
+| Browser-based MCP/Git clients send an `Origin` header and get rejected | Low | Non-browser clients send no headers and pass; browser clients can be added as trusted origins |
 | Bundle drift after CSS change | Med | Rebuild in Task 3 and rely on CI's bundle-freshness check |
 | `Secure` flag stays wrong behind TLS-terminating proxies | Low | Decision 6 + SRS note; revisit with a `KNOTWORK_TRUST_PROXY` flag if demanded |
 
@@ -283,11 +284,13 @@ requires explicit owner permission.
 
 ## Status
 
-Implemented 2026-11-03 on `main` as two increments:
+Implemented 2026-11-03 on `fix/csrf-protection`:
 
 - `280e27a` — origin protection middleware + test matrix (Tasks 1–2)
 - `cdd9d8f` — POST-only sign-out (Tasks 3–4)
-- Docs and task list follow in a third commit (Tasks 5–6)
+- `d38ec5d` — docs and task closeout (Tasks 5–6)
+- follow-up — review fixes: exemptions removed, headers outermost, `Build`
+  returns an error, tests split (see `tasks/review.md`)
 
 `make check`, `make ci` (race + shuffled), and `make vuln` pass. The issue #3
 comment is drafted but **not posted**; pushing or commenting needs explicit
@@ -297,7 +300,7 @@ permission.
 
 - `make check` and `make ci` pass; `make vuln` clean.
 - No new dependencies; no inline scripts/styles; CSP untouched.
-- Tests cover cross-site rejection, same-origin pass-through, header-less pass-through,
-  every exemption, and sign-out.
+- Tests cover cross-site rejection, same-origin pass-through, header-less
+  pass-through on each non-browser surface, and sign-out.
 - Docs updated; issue #3 ACs met or explicitly deferred in writing.
 - Committed frontend bundle matches source.

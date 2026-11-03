@@ -72,6 +72,12 @@ func Load() (Config, error) {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return Config{}, fmt.Errorf("KNOTWORK_BASE_URL must be http or https, got %q", u.Scheme)
 	}
+	if u.Path != "" && u.Path != "/" {
+		return Config{}, fmt.Errorf("KNOTWORK_BASE_URL must not include a path, got %q", baseURL)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return Config{}, fmt.Errorf("KNOTWORK_BASE_URL must not include a query or fragment, got %q", baseURL)
+	}
 
 	dataDir := env("DATA_DIR", "./data")
 	cfg := Config{

@@ -35,9 +35,10 @@
 }
 
 .site-header .logout-form {
-  display: contents;
+  display: inline;
 }
 
+/* Unlayered rules intentionally override Oat's layered button styles. */
 .link-button {
   background: none;
   border: 0;
@@ -49,6 +50,10 @@
 
 .link-button:hover {
   text-decoration: underline;
+}
+
+.link-button:active {
+  transform: none;
 }
 
 .site-footer {

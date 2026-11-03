@@ -340,7 +340,7 @@ Dave (Maintainer):
 * **Transport Security:** Pure HTTPS; internal auto-cert generation via ACME Let's Encrypt or manual TLS certificate specification.
 * **Federation Signatures:** All outbound ActivityPub payloads must be signed using Ed25519 HTTP Signatures conforming to `draft-cavage-http-signatures-12`.
 * **CI Isolation:** Docker containers must not share the host network (`--net=bridge` or `--net=none`) and must enforce read-only workspace roots where applicable.
-* **Cross-Site Request Forgery:** Browser requests that mutate state (`POST`, `PUT`, `PATCH`, `DELETE`) must pass same-origin validation on `Origin`/`Sec-Fetch-Site`; non-browser protocol surfaces (Git Smart HTTP, SCIM, MCP, federation inbox, device flow) are exempt. Sign-out must be a `POST`, never a navigable `GET`. The session cookie's `Secure` flag derives from the configured `KNOTWORK_BASE_URL` scheme; `X-Forwarded-Proto` is not trusted.
+* **Cross-Site Request Forgery:** Browser requests that mutate state (`POST`, `PUT`, `PATCH`, `DELETE`) must pass same-origin validation on `Origin`/`Sec-Fetch-Site`; requests carrying neither header are treated as non-browser clients. Sign-out must be a `POST`, never a navigable `GET`. `KNOTWORK_BASE_URL` must be an origin without a path, and the session cookie's `Secure` flag derives from its scheme; `X-Forwarded-Proto` is not trusted.
 
 ### 6.3 Reliability & Availability
 

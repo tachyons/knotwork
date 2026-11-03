@@ -34,13 +34,6 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	mux.Handle("POST /", h)
 }
 
-// IsGitRequest reports whether r targets the Git Smart HTTP surface. It reuses
-// the same parser as ServeHTTP so callers cannot drift from the real routes.
-func IsGitRequest(r *http.Request) bool {
-	_, ok := parseGitRequest(r)
-	return ok
-}
-
 type gitRequest struct {
 	owner    string
 	repo     string

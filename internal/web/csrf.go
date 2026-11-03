@@ -1,65 +1,51 @@
 package web
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
-
-	"knotwork/internal/gitengine"
+	"net/url"
 )
 
 // newCrossOriginProtection builds the origin guard for browser requests. It
-// rejects state-changing requests whose Origin or Sec-Fetch-Site header says
-// they came from another site. Requests carrying neither header are assumed to
-// be non-browser clients and pass through, which covers git, SCIM IdPs,
-// federation peers, and MCP clients.
-func newCrossOriginProtection(baseURL string, log *slog.Logger) *http.CrossOriginProtection {
+// rejects non-safe requests whose Origin or Sec-Fetch-Site header says they came
+// from another site. Requests carrying neither header are non-browser clients
+// (git, SCIM IdPs, federation peers, MCP clients) and pass through, so no
+// per-route exemptions are needed.
+func newCrossOriginProtection(baseURL string) (*http.CrossOriginProtection, error) {
 	cop := http.NewCrossOriginProtection()
 	if baseURL == "" {
-		return cop
+		return cop, nil
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse base URL for CSRF trusted origin: %w", err)
+	}
+	if u.Path != "" && u.Path != "/" {
+		return nil, fmt.Errorf("base URL must not include a path: %q", baseURL)
 	}
 	// Trust the configured public origin so reverse proxies that rewrite Host
 	// do not turn legitimate same-origin requests into cross-origin ones.
-	if err := cop.AddTrustedOrigin(baseURL); err != nil {
-		log.Warn("ignoring base URL as CSRF trusted origin", "base_url", baseURL, "error", err)
+	origin := u.Scheme + "://" + u.Host
+	if err := cop.AddTrustedOrigin(origin); err != nil {
+		return nil, fmt.Errorf("add CSRF trusted origin %q: %w", origin, err)
 	}
-	return cop
+	return cop, nil
 }
 
-// csrfMiddleware applies the origin check to every request that is not part of
-// a non-browser protocol surface.
-func csrfMiddleware(cop *http.CrossOriginProtection, next http.Handler) http.Handler {
+// crossOriginCheck rejects cross-site browser requests before they reach a
+// handler. Check returns nil for safe methods and for requests without
+// Origin/Sec-Fetch-Site, so non-browser protocols pass without exemptions.
+func crossOriginCheck(cop *http.CrossOriginProtection, log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !nonBrowserSurface(r) {
-			if err := cop.Check(r); err != nil {
-				writeError(w, http.StatusForbidden, "cross-origin request rejected")
-				return
-			}
+		if err := cop.Check(r); err != nil {
+			log.DebugContext(r.Context(), "cross-origin request rejected",
+				"origin", r.Header.Get("Origin"),
+				"sec_fetch_site", r.Header.Get("Sec-Fetch-Site"),
+				"error", err)
+			writeError(w, http.StatusForbidden, "cross-origin request rejected")
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// nonBrowserSurface reports whether r belongs to a protocol whose clients never
-// send browser origin headers. These surfaces authenticate with bearer tokens,
-// HTTP Basic, HTTP signatures, or their own credentials, so origin checks do not
-// apply. The predicate reuses the Git router's parser instead of matching paths
-// by hand, because `/{owner}/{repo}.git/...` is not expressible as a ServeMux
-// pattern.
-func nonBrowserSurface(r *http.Request) bool {
-	if gitengine.IsGitRequest(r) {
-		return true
-	}
-	p := r.URL.Path
-	switch {
-	case strings.HasPrefix(p, "/scim/v2/"):
-		return true
-	case strings.HasPrefix(p, "/api/mcp/"):
-		return true
-	case p == "/inbox":
-		return true
-	case p == "/auth/device/code", p == "/auth/device/token":
-		return true
-	}
-	return false
 }

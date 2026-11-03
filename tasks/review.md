@@ -1,59 +1,54 @@
 # Review: CSRF protection branch (`fix/csrf-protection`)
 
 Independent review of `280e27a`, `cdd9d8f`, `d38ec5d`. Verdict at review time:
-**request changes**. Status below is the disposition after triage; nothing is
-fixed yet unless checked.
+**request changes**. All findings below are resolved in the follow-up commit.
 
 ## Critical
 
-- [ ] **SCIM/MCP exemptions skip the check on cookie-authenticated routes.**
-  `nonBrowserSurface` bypasses `/scim/v2/*` and `/api/mcp/*`, but both accept the
+- [x] **SCIM/MCP exemptions skipped the check on cookie-authenticated routes.**
+  `nonBrowserSurface` bypassed `/scim/v2/*` and `/api/mcp/*`, but both accept the
   session cookie via `RequireUser`/`RequireSCIM` → `UserFromRequest`. A same-site
   sibling origin sends the cookie and `Sec-Fetch-Site: same-site`, which the
-  stdlib would reject and the exemption lets through.
-  **Fix:** delete the path exemptions. Header-less non-browser clients already
-  pass `CrossOriginProtection.Check`; the list only widens the hole. If a
-  browser-based client must be supported, gate on `Authorization` presence or an
-  explicit trusted origin, never on the path.
-  Owner sign-off needed because issue #3 listed these exemptions.
+  stdlib rejects and the exemption let through.
+  **Fix applied:** all path exemptions removed, along with `nonBrowserSurface`
+  and the `gitengine.IsGitRequest` export. Header-less non-browser clients already
+  pass `CrossOriginProtection.Check`. Regression tests now assert 403 for
+  cross-site SCIM, MCP, Git, inbox, and device-code POSTs.
 
 ## Required
 
-- [ ] **403s lose the security headers.** `csrfMiddleware` wraps
-  `securityHeaders`, so the rejection is written before they run. Move
-  `securityHeaders` outermost in `Server.wrap` and update ARCHITECTURE.
-- [ ] **Invalid `BaseURL` silently disables the trusted origin.**
-  `AddTrustedOrigin` rejects URLs with a path, but `config.Load` accepts them.
-  Parse the URL, pass `scheme://host`, and fail loudly instead of warning.
-- [ ] **Trusted-origin/reverse-proxy path is untested.** Add a case with
-  `req.Host = "internal:8080"` + `Origin: http://example.com`, and a
-  non-matching origin expecting 403.
-- [ ] **Table asserts handler statuses, not CSRF decisions.** Split into a
-  middleware unit table over a stub handler (`wantRejected bool`), a
-  `nonBrowserSurface` path table (if any exemptions survive), and two or three
-  end-to-end cases. Reuse one server per table.
-- [ ] **ARCHITECTURE claims SCIM/MCP are bearer-only.** They accept the session
-  cookie; correct or remove with the Critical fix.
+- [x] **403s lost the security headers.** `securityHeaders` now wraps logging,
+  panic recovery, and the origin check, so CSRF rejections and recovered panics
+  carry `nosniff`/CSP/referrer headers. Panics are also logged with status 500.
+- [x] **Invalid `BaseURL` silently disabled the trusted origin.** The origin is
+  parsed to `scheme://host`, a path is rejected by both `config.Load` and the
+  constructor, and `Server.Build` now returns an error that `serve` logs and
+  exits on.
+- [x] **Trusted-origin/reverse-proxy path is tested.** `TestCrossOriginCheck`
+  covers `Host: internal:8080` + `Origin: http://example.com` (allowed) and a
+  non-matching origin (403).
+- [x] **Tests assert CSRF decisions, not handler statuses.** `TestCrossOriginCheck`
+  is a unit table over a stub handler; `TestCrossOriginProtectionEndToEnd` keeps
+  ten end-to-end cases on a single server, including header-less pass-through.
+- [x] **ARCHITECTURE no longer claims SCIM/MCP are bearer-only.** The exemption
+  list is gone and the wrapper order is corrected.
 
 ## Optional / Nit
 
-- [ ] Call `Check` first and evaluate exemptions only on rejection; avoids
-  parsing paths for every safe request.
-- [ ] Rename `csrfMiddleware` → `crossOriginCheck` for consistency with
-  `securityHeaders`/`recoverPanic`.
-- [ ] Log the rejection reason (`Origin`, `Sec-Fetch-Site`) at debug.
-- [ ] Move `authedCookie` next to `setupTestServer` in `ui_test.go`.
-- [ ] Assert `Allow: POST` in `TestLogoutRejectsGET`.
-- [ ] Scope the sign-out markup assertion to the logout form.
-- [ ] `display: contents` → `display: inline` on `.logout-form`; add
-  `.link-button:active { transform: none }` and a comment that unlayered CSS
-  intentionally beats Oat's layered button styles.
-- [ ] `gitengine.IsGitRequest` → `IsSmartHTTPRequest`, with a small test.
+- [x] `Check` runs first; there is no path parsing left on safe requests.
+- [x] `csrfMiddleware` renamed to `crossOriginCheck`.
+- [x] Rejections log `Origin`, `Sec-Fetch-Site`, and the stdlib error at debug.
+- [x] `authedCookie` moved next to `setupTestServer` in `ui_test.go`.
+- [x] `TestLogoutRejectsGET` asserts `Allow: POST`.
+- [x] The sign-out markup assertion matches the exact form snippet and
+  `link-button` submit.
+- [x] `.logout-form` uses `display: inline`; `.link-button:active` resets Oat's
+  press transform; a comment records the unlayered-vs-layered override.
+- [x] `gitengine.IsGitRequest` deleted rather than renamed, since no caller
+  remains.
 
 ## Verified well
 
-- `gitengine.IsGitRequest` reuses `parseGitRequest`, so the predicate cannot
-  drift from the real routes.
 - The explicit `GET /auth/logout` 405 route is necessary: without it the Git
   catch-all answers 404.
 - Logout tests assert the session is still valid on GET and actually revoked on

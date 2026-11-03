@@ -46,3 +46,10 @@ func TestLoadRejectsNonHTTPBaseURL(t *testing.T) {
 		t.Fatal("expected invalid scheme to fail")
 	}
 }
+
+func TestLoadRejectsBaseURLWithPath(t *testing.T) {
+	t.Setenv("KNOTWORK_BASE_URL", "https://example.com/knotwork")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected base URL with a path to fail")
+	}
+}

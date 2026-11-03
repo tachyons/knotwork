@@ -19,6 +19,9 @@ func TestLogoutRejectsGET(t *testing.T) {
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /auth/logout status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
+	if allow := rec.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("Allow = %q, want %q", allow, http.MethodPost)
+	}
 	if _, err := db.UserForSession(t.Context(), cookie.Value); err != nil {
 		t.Fatalf("GET /auth/logout revoked the session: %v", err)
 	}
@@ -85,8 +88,12 @@ func TestSignOutIsPostForm(t *testing.T) {
 		t.Fatalf("GET / status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, `action="/auth/logout"`) || !strings.Contains(body, `method="POST"`) {
-		t.Fatalf("expected a POST form to /auth/logout, got:\n%s", body)
+	want := `<form method="POST" action="/auth/logout" class="logout-form">`
+	if !strings.Contains(body, want) {
+		t.Fatalf("expected %s, got:\n%s", want, body)
+	}
+	if !strings.Contains(body, `class="link-button"`) {
+		t.Fatalf("expected a link-button submit inside the sign-out form, got:\n%s", body)
 	}
 	if strings.Contains(body, `href="/auth/logout"`) {
 		t.Fatalf("sign-out must not be a GET link, got:\n%s", body)

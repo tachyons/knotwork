@@ -54,26 +54,24 @@ token with `git credential approve`. Bearer tokens are Ed25519 JWTs for API and
 Git use, or opaque session tokens for SCIM.
 
 `knotwork admin break-glass` mints a single-use session URL for an existing
-admin. SCIM uses the same bearer-token path; deactivation (`active: false` or
-`DELETE`) revokes every live session immediately.
+admin. SCIM authenticates through the same `UserFromRequest` resolver as the
+API, so it accepts bearer tokens and session cookies; deactivation
+(`active: false` or `DELETE`) revokes every live session immediately.
 
 ## Request pipeline
 
-Every route is wrapped once in `Server.wrap`: panic recovery, structured request
-logging, CSRF protection, then security headers. CSRF protection uses the stdlib
-`net/http.CrossOriginProtection`, which rejects unsafe methods (`POST`, `PUT`,
-`PATCH`, `DELETE`) when `Origin` or `Sec-Fetch-Site` says the request came from
-another site. Requests with neither header are non-browser clients and pass.
+Every route is wrapped once in `Server.wrap`: security headers, structured
+request logging, panic recovery, then CSRF protection. CSRF protection uses the
+stdlib `net/http.CrossOriginProtection`, which rejects every non-safe method
+(`POST`, `PUT`, `PATCH`, `DELETE`, ...) when `Origin` or `Sec-Fetch-Site` says the
+request came from another site. Requests carrying neither header are non-browser
+clients — git, SCIM IdPs, federation peers, MCP clients — and pass, so no route
+needs an exemption.
 
 `Cfg.BaseURL` is registered as a trusted origin so reverse proxies that rewrite
-`Host` do not break same-origin form posts. Four surfaces are exempt because
-their clients never send browser origin headers and authenticate another way:
-
-- Git Smart HTTP (`/{owner}/{repo}.git/...`), matched with
-  `gitengine.IsGitRequest`; the path cannot be expressed as a `ServeMux` pattern.
-- `/scim/v2/*` (bearer tokens).
-- `/api/mcp/*` (bearer tokens).
-- `/inbox` (HTTP signatures) and `/auth/device/{code,token}` (device flow).
+`Host` do not break same-origin form posts. `KNOTWORK_BASE_URL` must be an origin
+without a path; a path is rejected at startup because the router is mounted at
+the root.
 
 Sign-out is `POST /auth/logout` only; `GET` returns 405 because origin checks
 cannot cover navigation-triggered state changes. Session cookies are `HttpOnly`,
