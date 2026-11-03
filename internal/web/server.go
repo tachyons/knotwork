@@ -80,7 +80,8 @@ func (s *Server) registerGitHTTP() {
 }
 
 func (s *Server) wrap(next http.Handler) http.Handler {
-	return s.recoverPanic(logging.Middleware(s.Log)(securityHeaders(next)))
+	cop := newCrossOriginProtection(s.Cfg.BaseURL, s.Log)
+	return s.recoverPanic(logging.Middleware(s.Log)(csrfMiddleware(cop, securityHeaders(next))))
 }
 
 func securityHeaders(next http.Handler) http.Handler {
