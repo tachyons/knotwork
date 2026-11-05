@@ -69,7 +69,7 @@ bundle and fails if the committed output is stale.
 
 ## Layout
 
-- `cmd/knotwork/` — `serve`, `admin`, `auth login`, `hook` entrypoints.
+- `cmd/knotwork/` — `serve`, `admin`, `auth login`, `hook`, and `mcp` entrypoints.
 - `internal/domain` — dependency-free entities/constants.
 - `internal/database` — store and embedded migrations (`0001_init.sql`).
 - `internal/auth` — OIDC, sessions, JWTs, device flow, SCIM, break-glass.
