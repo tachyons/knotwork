@@ -64,7 +64,10 @@ Every route is wrapped once in `Server.wrap`: security headers, structured
 request logging, panic recovery, then CSRF protection. CSRF protection uses the
 stdlib `net/http.CrossOriginProtection`, which rejects every non-safe method
 (`POST`, `PUT`, `PATCH`, `DELETE`, ...) when `Origin` or `Sec-Fetch-Site` says the
-request came from another site. Requests carrying neither header are non-browser
+request came from another site. The stdlib trusts `Sec-Fetch-Site: same-origin`
+and returns early, so Knotwork validates a present `Origin` header itself against
+the request host or the configured public origin; a rewritten fetch-metadata
+header cannot bypass the check. Requests carrying neither header are non-browser
 clients — git, SCIM IdPs, federation peers, MCP clients — and pass, so no route
 needs an exemption.
 

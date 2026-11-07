@@ -63,11 +63,11 @@ func (s *Server) Build() (http.Handler, error) {
 		s.MCP.Register(s.mux)
 	}
 	s.registerAPI()
-	cop, err := newCrossOriginProtection(s.Cfg.BaseURL)
+	guard, err := newCrossOriginProtection(s.Cfg.BaseURL)
 	if err != nil {
 		return nil, err
 	}
-	return s.wrap(cop, s.mux), nil
+	return s.wrap(guard, s.mux), nil
 }
 
 func (s *Server) registerGitHTTP() {
@@ -83,11 +83,11 @@ func (s *Server) registerGitHTTP() {
 	h.Register(s.mux)
 }
 
-func (s *Server) wrap(cop *http.CrossOriginProtection, next http.Handler) http.Handler {
+func (s *Server) wrap(guard *crossOriginGuard, next http.Handler) http.Handler {
 	// Security headers are outermost so CSRF rejections and panic responses
 	// carry them too. Logging wraps panic recovery so recovered panics are
 	// logged with their status.
-	return securityHeaders(logging.Middleware(s.Log)(s.recoverPanic(crossOriginCheck(cop, s.Log, next))))
+	return securityHeaders(logging.Middleware(s.Log)(s.recoverPanic(crossOriginCheck(guard, s.Log, next))))
 }
 
 func securityHeaders(next http.Handler) http.Handler {

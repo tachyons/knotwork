@@ -20,14 +20,14 @@ func TestNewCrossOriginProtectionRejectsBaseURLWithPath(t *testing.T) {
 }
 
 func TestCrossOriginCheck(t *testing.T) {
-	cop, err := newCrossOriginProtection("http://example.com")
+	guard, err := newCrossOriginProtection("http://example.com")
 	if err != nil {
 		t.Fatalf("newCrossOriginProtection: %v", err)
 	}
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := crossOriginCheck(cop, discardLogger(), next)
+	handler := crossOriginCheck(guard, discardLogger(), next)
 
 	tests := []struct {
 		name         string
@@ -63,6 +63,20 @@ func TestCrossOriginCheck(t *testing.T) {
 			name:         "same-site fetch metadata is rejected",
 			method:       http.MethodPost,
 			secFetchSite: "same-site",
+			wantRejected: true,
+		},
+		{
+			name:         "cross-origin Origin with same-origin fetch metadata is rejected",
+			method:       http.MethodPost,
+			origin:       "http://google.com",
+			secFetchSite: "same-origin",
+			wantRejected: true,
+		},
+		{
+			name:         "cross-origin Origin with none fetch metadata is rejected",
+			method:       http.MethodPost,
+			origin:       "http://google.com",
+			secFetchSite: "none",
 			wantRejected: true,
 		},
 		{
@@ -126,12 +140,13 @@ func TestCrossOriginProtectionEndToEnd(t *testing.T) {
 	cookie := authedCookie(t, server)
 
 	tests := []struct {
-		name       string
-		method     string
-		path       string
-		body       string
-		origin     string
-		wantStatus int
+		name         string
+		method       string
+		path         string
+		body         string
+		origin       string
+		secFetchSite string
+		wantStatus   int
 	}{
 		{
 			name:       "same-origin POST creates a repo",
@@ -140,6 +155,15 @@ func TestCrossOriginProtectionEndToEnd(t *testing.T) {
 			body:       `{"name":"csrf-e2e","private":true}`,
 			origin:     "http://example.com",
 			wantStatus: http.StatusCreated,
+		},
+		{
+			name:         "cross-origin Origin with same-origin fetch metadata is rejected",
+			method:       http.MethodPost,
+			path:         "/api/repos",
+			body:         `{"name":"csrf-spoof","private":true}`,
+			origin:       "http://google.com",
+			secFetchSite: "same-origin",
+			wantStatus:   http.StatusForbidden,
 		},
 		{
 			name:       "cross-site POST is rejected",
@@ -216,6 +240,9 @@ func TestCrossOriginProtectionEndToEnd(t *testing.T) {
 			}
 			if tc.origin != "" {
 				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.secFetchSite != "" {
+				req.Header.Set("Sec-Fetch-Site", tc.secFetchSite)
 			}
 			req.AddCookie(cookie)
 
