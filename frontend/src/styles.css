@@ -34,6 +34,28 @@
   padding: 0.35rem 0.75rem;
 }
 
+.site-header .logout-form {
+  display: inline;
+}
+
+/* Unlayered rules intentionally override Oat's layered button styles. */
+.link-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.link-button:active {
+  transform: none;
+}
+
 .site-footer {
   border-top: 1px solid var(--kw-border);
   margin-top: 3rem;

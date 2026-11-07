@@ -137,7 +137,11 @@ func runServe(args []string) int {
 		CI: executor, Hub: hub, Backup: backupMgr, Fed: fed, MCP: mcpServer, Log: log,
 		OnPushSuccess: onPushSuccess,
 	}
-	handler := app.Build()
+	handler, err := app.Build()
+	if err != nil {
+		log.Error("could not build HTTP handler", "error", err)
+		return 1
+	}
 
 	setupDone, _ := store.SetupCompleted(ctx)
 	if !setupDone {
