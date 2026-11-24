@@ -10,24 +10,32 @@
 *.db-wal
 *.bundle
 *.zst
+*.sock
+*.log
 
 # setup
 .env
-.env.local
+.env.*
+!.env.example
 
 # frontend tooling
 /frontend/node_modules/
 /frontend/dist/
+/frontend/.vite/
 *.tsbuildinfo
 
 # local test/coverage output
 /coverage.out
+*.test
 
 # editor / OS
 .DS_Store
 .idea/
 .vscode/
-frontend/node_modules/
+/.openidea/
+
+# agent task scratch
+/tasks/
 
 # harness-injected agent skills
 /skills/

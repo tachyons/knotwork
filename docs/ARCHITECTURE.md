@@ -54,8 +54,31 @@ token with `git credential approve`. Bearer tokens are Ed25519 JWTs for API and
 Git use, or opaque session tokens for SCIM.
 
 `knotwork admin break-glass` mints a single-use session URL for an existing
-admin. SCIM uses the same bearer-token path; deactivation (`active: false` or
-`DELETE`) revokes every live session immediately.
+admin. SCIM authenticates through the same `UserFromRequest` resolver as the
+API, so it accepts bearer tokens and session cookies; deactivation
+(`active: false` or `DELETE`) revokes every live session immediately.
+
+## Request pipeline
+
+Every route is wrapped once in `Server.wrap`: security headers, structured
+request logging, panic recovery, then CSRF protection. CSRF protection uses the
+stdlib `net/http.CrossOriginProtection`, which rejects every non-safe method
+(`POST`, `PUT`, `PATCH`, `DELETE`, ...) when `Origin` or `Sec-Fetch-Site` says the
+request came from another site. The stdlib trusts `Sec-Fetch-Site: same-origin`
+and returns early, so Knotwork validates a present `Origin` header itself against
+the request host or the configured public origin; a rewritten fetch-metadata
+header cannot bypass the check. Requests carrying neither header are non-browser
+clients — git, SCIM IdPs, federation peers, MCP clients — and pass, so no route
+needs an exemption.
+
+`Cfg.BaseURL` is registered as a trusted origin so reverse proxies that rewrite
+`Host` do not break same-origin form posts. `KNOTWORK_BASE_URL` must be an origin
+without a path; a path is rejected at startup because the router is mounted at
+the root.
+
+Sign-out is `POST /auth/logout` only; `GET` returns 405 because origin checks
+cannot cover navigation-triggered state changes. Session cookies are `HttpOnly`,
+`SameSite=Lax`, and `Secure` when `Cfg.BaseURL` is HTTPS.
 
 ## Git path
 

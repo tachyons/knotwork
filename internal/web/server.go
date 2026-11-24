@@ -38,7 +38,7 @@ type Server struct {
 }
 
 // Build registers every route and returns the wrapped handler.
-func (s *Server) Build() http.Handler {
+func (s *Server) Build() (http.Handler, error) {
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -63,7 +63,11 @@ func (s *Server) Build() http.Handler {
 		s.MCP.Register(s.mux)
 	}
 	s.registerAPI()
-	return s.wrap(s.mux)
+	guard, err := newCrossOriginProtection(s.Cfg.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	return s.wrap(guard, s.mux), nil
 }
 
 func (s *Server) registerGitHTTP() {
@@ -79,8 +83,11 @@ func (s *Server) registerGitHTTP() {
 	h.Register(s.mux)
 }
 
-func (s *Server) wrap(next http.Handler) http.Handler {
-	return s.recoverPanic(logging.Middleware(s.Log)(securityHeaders(next)))
+func (s *Server) wrap(guard *crossOriginGuard, next http.Handler) http.Handler {
+	// Security headers are outermost so CSRF rejections and panic responses
+	// carry them too. Logging wraps panic recovery so recovered panics are
+	// logged with their status.
+	return securityHeaders(logging.Middleware(s.Log)(s.recoverPanic(crossOriginCheck(guard, s.Log, next))))
 }
 
 func securityHeaders(next http.Handler) http.Handler {

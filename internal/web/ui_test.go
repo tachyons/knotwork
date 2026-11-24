@@ -51,8 +51,27 @@ func setupTestServer(t *testing.T) (*Server, *database.DB, *gitengine.Manager, h
 		Git:  gitMgr,
 		Log:  log,
 	}
-	handler := server.Build()
+	handler, err := server.Build()
+	if err != nil {
+		t.Fatalf("server.Build: %v", err)
+	}
 	return server, db, gitMgr, handler
+}
+
+// authedCookie mints a web session for a fresh admin user and returns the
+// cookie that carries it.
+func authedCookie(t *testing.T, s *Server) *http.Cookie {
+	t.Helper()
+	ctx := t.Context()
+	user, err := s.DB.UpsertOIDCUser(ctx, "csrf-sub", "csrf@example.com", "csrf", "CSRF Tester")
+	if err != nil {
+		t.Fatalf("UpsertOIDCUser: %v", err)
+	}
+	token, err := s.DB.CreateSession(ctx, user.ID, "web", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	return &http.Cookie{Name: "knotwork_session", Value: token}
 }
 
 func TestNewRepoPageAuth(t *testing.T) {
