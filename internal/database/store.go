@@ -77,10 +77,19 @@ func (d *DB) GetUserByEmail(ctx context.Context, email string) (domain.User, err
 	return scanUser(d.QueryRowContext(ctx, d.q(`SELECT `+userCols+` FROM users WHERE lower(email) = lower(?)`), email))
 }
 
-func (d *DB) UpdateSCIMUser(ctx context.Context, scimID, email, username, displayName string) error {
-	_, err := d.ExecContext(ctx, d.q(`UPDATE users SET email = ?, username = ?, display_name = ?, updated_at = ?
-		WHERE scim_id = ?`), email, username, displayName, Now(), scimID)
-	return err
+// UpdateSCIMUser applies a full SCIM profile update by internal user ID. An
+// empty SCIM ID is stored as NULL so multiple users can omit externalId.
+func (d *DB) UpdateSCIMUser(ctx context.Context, id, scimID, email, username, displayName string, active bool) error {
+	_, err := d.ExecContext(ctx, d.q(`UPDATE users SET scim_id = NULLIF(?, ''), email = ?, username = ?,
+		display_name = ?, is_active = ?, updated_at = ? WHERE id = ?`),
+		scimID, email, username, displayName, boolInt(active), Now(), id)
+	if err != nil {
+		return err
+	}
+	if !active {
+		return d.RevokeSessions(ctx, id)
+	}
+	return nil
 }
 
 func (d *DB) ListUsers(ctx context.Context) ([]domain.User, error) {
