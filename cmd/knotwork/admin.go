@@ -239,6 +239,15 @@ func adminPeers(args []string) int {
 			fmt.Fprintln(os.Stderr, "--domain is required")
 			return 2
 		}
+		for name, raw := range map[string]string{"inbox": *inbox, "actor": *actor} {
+			if raw == "" {
+				continue
+			}
+			if err := federation.ValidateOutboundURL(raw); err != nil {
+				fmt.Fprintf(os.Stderr, "invalid %s URL: %v\n", name, err)
+				return 2
+			}
+		}
 		key := ""
 		if *keyFile != "" {
 			body, err := os.ReadFile(*keyFile)

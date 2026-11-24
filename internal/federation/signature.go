@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -192,11 +191,14 @@ func PublicKeyFromPEM(value string) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(block.Bytes), nil
 }
 
-// Deliver signs and posts an activity to a remote inbox.
+// Deliver signs and posts an activity to a remote inbox. A nil client uses
+// NewDeliveryClient, which blocks loopback, private, and link-local targets.
 func Deliver(ctx context.Context, client *http.Client, inbox string, activity []byte, key ed25519.PrivateKey, keyID string) error {
-	u, err := url.Parse(inbox)
-	if err != nil || u.Scheme != "https" {
-		return fmt.Errorf("inbox must be an https URL")
+	if err := ValidateOutboundURL(inbox); err != nil {
+		return fmt.Errorf("invalid inbox: %w", err)
+	}
+	if client == nil {
+		client = NewDeliveryClient()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, inbox, bytes.NewReader(activity))
 	if err != nil {

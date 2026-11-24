@@ -18,11 +18,16 @@ var (
 
 // ValidateRef validates branch names, tags, and revisions against a strict
 // alphanumeric regex (^[a-zA-Z0-9_\-./]+$), rejecting options (starting with -),
-// control characters, path traversals (..), reflog queries (@{), or invalid edges.
+// control characters, path traversals (..), reflog queries (@{), or invalid
+// edges. Empty, ".", and ".." path segments are rejected so the value cannot
+// be mistaken for a Git option or escape the repository.
 func ValidateRef(ref string) error {
 	ref = strings.TrimSpace(ref)
 	if ref == "" || ref == "HEAD" {
 		return nil
+	}
+	if hasControlChars(ref) {
+		return ErrInvalidRef
 	}
 	if strings.HasPrefix(ref, "-") || strings.HasPrefix(ref, "/") || strings.HasSuffix(ref, "/") || strings.HasSuffix(ref, ".") || strings.Contains(ref, "..") || strings.Contains(ref, "@{") {
 		return ErrInvalidRef
@@ -30,19 +35,42 @@ func ValidateRef(ref string) error {
 	if !refPattern.MatchString(ref) {
 		return ErrInvalidRef
 	}
+	for _, segment := range strings.Split(ref, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return ErrInvalidRef
+		}
+	}
 	return nil
 }
 
-// ValidatePath rejects absolute paths and traversal when reading a blob.
+// ValidatePath rejects absolute paths, option-like paths, control characters,
+// null bytes, and traversal when reading a blob.
 func ValidatePath(p string) error {
 	if p == "" || strings.HasPrefix(p, "/") || strings.HasPrefix(p, "-") || strings.ContainsRune(p, '\x00') {
+		return ErrPathMissing
+	}
+	if hasControlChars(p) {
 		return ErrPathMissing
 	}
 	clean := path.Clean(p)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
 		return ErrPathMissing
 	}
+	for _, segment := range strings.Split(p, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return ErrPathMissing
+		}
+	}
 	return nil
+}
+
+func hasControlChars(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // IsEmpty reports whether diskPath has any commits.
@@ -63,7 +91,7 @@ func (m *Manager) ListTree(ctx context.Context, diskPath, ref string) ([]string,
 	if err := ValidateRef(ref); err != nil {
 		return nil, err
 	}
-	cmd := m.Command(ctx, "-C", diskPath, "ls-tree", "-r", "-z", "--name-only", "--", ref)
+	cmd := m.Command(ctx, "-C", diskPath, "ls-tree", "-r", "-z", "--name-only", "--end-of-options", ref)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -95,7 +123,7 @@ func (m *Manager) ReadBlob(ctx context.Context, diskPath, ref, filePath string) 
 	if err := ValidatePath(filePath); err != nil {
 		return nil, false, err
 	}
-	cmd := m.Command(ctx, "-C", diskPath, "cat-file", "-p", "--", ref+":"+filePath)
+	cmd := m.Command(ctx, "-C", diskPath, "cat-file", "-p", "--end-of-options", ref+":"+filePath)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
