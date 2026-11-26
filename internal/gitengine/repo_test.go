@@ -154,6 +154,11 @@ func TestValidateRef(t *testing.T) {
 		"/starts/slash",
 		"ends/slash/",
 		"ends/dot.",
+		"double//slash",
+		"dot/./segment",
+		"dot/../segment",
+		"nul\x00byte",
+		"new\nline",
 	}
 	for _, ref := range invalid {
 		if err := ValidateRef(ref); err == nil {
@@ -163,12 +168,16 @@ func TestValidateRef(t *testing.T) {
 }
 
 func TestValidatePath(t *testing.T) {
-	for _, p := range []string{"", "/etc/passwd", "../secret", "src/../../secret", "-rf"} {
+	for _, p := range []string{
+		"", "/etc/passwd", "../secret", "src/../../secret", "-rf",
+		"a/../b", "src/./main.go", "src//main.go", "src/main.go/",
+		"nul\x00byte", "new\nline",
+	} {
 		if err := ValidatePath(p); err == nil {
 			t.Errorf("ValidatePath(%q) accepted", p)
 		}
 	}
-	for _, p := range []string{"README.md", "src/main.go", "a/../b"} {
+	for _, p := range []string{"README.md", "src/main.go", "src/.hidden"} {
 		if err := ValidatePath(p); err != nil {
 			t.Errorf("ValidatePath(%q) = %v", p, err)
 		}

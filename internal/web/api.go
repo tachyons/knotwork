@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -423,9 +422,8 @@ func (s *Server) adminUpsertPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.InboxURL != "" {
-		u, err := url.Parse(in.InboxURL)
-		if err != nil || u.Scheme != "https" || u.Host == "" {
-			writeError(w, http.StatusBadRequest, "inbox_url must be https")
+		if err := federation.ValidateOutboundURL(in.InboxURL); err != nil {
+			writeError(w, http.StatusBadRequest, "inbox_url must be a public https URL: "+err.Error())
 			return
 		}
 	}
