@@ -40,6 +40,8 @@ func main() {
 			break
 		}
 		code = runHook(os.Args[2])
+	case "mcp":
+		code = runMCP(os.Args[2:])
 	case "version":
 		fmt.Println("knotwork 0.1.0")
 	default:
@@ -65,6 +67,7 @@ Usage:
   knotwork admin scim-token          Mint a SCIM bearer token
   knotwork admin peers list|add|remove
   knotwork hook pre-receive
+  knotwork mcp                       Serve MCP on stdio (requires KNOTWORK_MCP_TOKEN)
   knotwork version
 `)
 }

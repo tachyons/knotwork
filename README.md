@@ -63,10 +63,22 @@ knotwork admin break-glass --email ... --duration 15m
 knotwork admin revoke-sessions [--email ...]
 knotwork admin scim-token --email ...
 knotwork admin peers list|add|remove
+knotwork mcp                          # stdio MCP; requires KNOTWORK_MCP_TOKEN
 ```
 
 `break-glass` prints a single-use emergency URL. It only works for an existing
 administrator and expires after the requested duration.
+
+MCP is opt-in on the existing server. It is not a separate service. Streamable
+HTTP is `POST /api/mcp` with the same API token as the API, sent as
+`Authorization: Bearer` or as HTTP Basic (the password, or the username when
+the password is empty). `GET /api/mcp/sse` and `POST /api/mcp/messages` remain
+for legacy SSE clients. Local stdio is `KNOTWORK_MCP_TOKEN=... knotwork mcp`.
+The token is an existing device-flow bearer or instance JWT. stdout is the
+protocol stream. Protected-resource metadata is at
+`/.well-known/oauth-protected-resource/api/mcp`. MCP HTTP requests use the
+server request log: the response carries `X-Request-ID` and the access line
+records it as `req_id`.
 
 ## Git
 
@@ -169,7 +181,7 @@ internal/gitengine/    bare repos, Smart HTTP, hook IPC, tree/blob/diff reads
 internal/federation/   HTTP signatures, allowlisted inbox, ForgeFed activities
 internal/ci/           pipeline parser, Docker runner, log hub, executor
 internal/backup/       debounced git bundles and compressed DB snapshots
-internal/mcp/          MCP SSE server and tools/resources
+internal/mcp/          MCP Streamable HTTP, legacy SSE, and stdio
 internal/web/          HTML UI, JSON API, embedded static assets
 frontend/              Oat + Pierre UI source
 docs/SRS.md            authoritative specification

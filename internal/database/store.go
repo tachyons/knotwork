@@ -147,6 +147,28 @@ func (d *DB) UserForSession(ctx context.Context, rawToken string) (domain.User, 
 		hashToken(rawToken), Now()))
 }
 
+// SessionPrincipal resolves a live, non-break-glass session and its expiry.
+// Callers that must reject a missing expiration (MCP bearer checks) use this
+// instead of UserForSession, which does not return expires_at.
+func (d *DB) SessionPrincipal(ctx context.Context, rawToken string) (domain.User, time.Time, error) {
+	var user domain.User
+	var expires string
+	err := d.QueryRowContext(ctx, d.q(`SELECT `+prefixedUserCols+`, s.expires_at FROM sessions s
+		JOIN users u ON u.id = s.user_id
+		WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ? AND s.kind <> 'break_glass' AND u.is_active = 1`),
+		hashToken(rawToken), Now()).Scan(
+		&user.ID, &user.ExternalID, &user.SCIMID, &user.Username, &user.Email, &user.DisplayName,
+		&user.Role, &user.IsActive, &user.PublicKey, &user.CreatedAt, &user.UpdatedAt, &expires)
+	if err != nil {
+		return domain.User{}, time.Time{}, err
+	}
+	expiresAt, err := time.ParseInLocation(TimeLayout, expires, time.UTC)
+	if err != nil {
+		return domain.User{}, time.Time{}, err
+	}
+	return user, expiresAt, nil
+}
+
 // UserForBreakGlass resolves a still-valid, single-use break-glass token.
 func (d *DB) UserForBreakGlass(ctx context.Context, rawToken string) (domain.User, error) {
 	return scanUser(d.QueryRowContext(ctx, d.q(`SELECT `+prefixedUserCols+` FROM sessions s

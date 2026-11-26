@@ -69,6 +69,39 @@ func TestSessionsAndRevocation(t *testing.T) {
 	}
 }
 
+func TestSessionPrincipalExpiryAndBreakGlass(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	user, err := db.UpsertOIDCUser(ctx, "sub", "u@example.com", "user", "User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := db.CreateSession(ctx, user.ID, "api", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, expires, err := db.SessionPrincipal(ctx, raw)
+	if err != nil || got.ID != user.ID {
+		t.Fatalf("SessionPrincipal: %+v, %v", got, err)
+	}
+	if time.Until(expires) <= 0 {
+		t.Fatalf("expiry %v is not in the future", expires)
+	}
+	glass, err := db.CreateSession(ctx, user.ID, "break_glass", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := db.SessionPrincipal(ctx, glass); err == nil {
+		t.Fatal("break-glass token resolved as an API session")
+	}
+	if err := db.RevokeSessions(ctx, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := db.SessionPrincipal(ctx, raw); err == nil {
+		t.Fatal("revoked session still resolves")
+	}
+}
+
 func TestBreakGlassIsSingleUse(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)

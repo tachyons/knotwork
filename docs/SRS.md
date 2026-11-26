@@ -281,13 +281,15 @@ Dave (Maintainer):
 #### US-4.3: Model Context Protocol (MCP) Integration
 
 * **As an** AI agent or AI-assisted developer
-* **I want to** interface with Knotwork via MCP over SSE or stdio
-* **So that** external LLMs can natively inspect code diffs and submit review comments.
+* **I want to** interface with Knotwork via MCP over Streamable HTTP, legacy SSE, or stdio
+* **So that** external clients can inspect merge requests and repository content and submit review comments.
 * **Acceptance Criteria:**
-  1. The server must implement the standard Model Context Protocol over `/api/mcp/sse`.
-  2. Expose resources: `knotwork://{repo}/diff/{mr_id}` and `knotwork://{repo}/tree/{ref}`.
-  3. Expose tools: `create_review_comment(mr_id, path, line, body)` and `get_mr_details(mr_id)`.
-  4. Authentication to MCP endpoints must respect standard Bearer token permissions.
+  1. `POST /api/mcp` serves stateless Streamable HTTP. The same endpoint accepts a legacy `initialize` / `notifications/initialized` session and a 2026-07-28 client that uses `server/discover`. The server uses `github.com/modelcontextprotocol/go-sdk` v1.8.0. That release's supported protocol versions are 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25, and 2026-07-28. A 2026-07-28 request must carry that SDK's per-request `_meta` (`io.modelcontextprotocol/protocolVersion` and client capabilities) and a matching `Mcp-Protocol-Version` header. The SDK also sends `Mcp-Method` and `Mcp-Name` for that revision. 2026-07-28 is not offered on a stateful Streamable HTTP session.
+  2. Legacy HTTP+SSE remains: `GET /api/mcp/sse` emits the `endpoint` event, and `POST /api/mcp/messages?session=` carries client messages. Responses are SSE `message` events and the POST returns 202. This transport does not serve protocol 2026-07-28.
+  3. `knotwork mcp` serves the same tools and resources on stdio. It requires `KNOTWORK_MCP_TOKEN`, an existing API bearer (device-flow session token or instance JWT). It does not assume an administrator, accept a caller-supplied user id, or skip authentication. stdout is only the protocol stream.
+  4. Resources are `knotwork://{owner}/{repo}/tree/{ref}` and `knotwork://{owner}/{repo}/diff/{number}`, plus the `forge://` aliases. `resources/list` returns the HEAD tree of repositories the bearer may read. `resources/read` returns that text in the standard `contents` array.
+  5. Tools are `get_mr_details(repo, number)` and `create_review_comment(repo, number, path, line, body)`. Creating a review comment requires repository role `write` or `admin`.
+  6. Every HTTP MCP request resolves its principal from that request's API token. The token may be an `Authorization: Bearer` value or HTTP Basic credentials, where the password is the token and an empty password uses the username. This is the same check Git Smart HTTP uses. A session id cannot select a different user. Missing, invalid, and revoked credentials are refused. Each MCP response includes `X-Request-ID`, and the server access log records that id as `req_id` along with method, path, and status. Protected resource metadata (RFC 9728) is at `/.well-known/oauth-protected-resource/api/mcp` for the resource `{base}/api/mcp`. Knotwork does not embed an authorization server.
 
 ### Epic 5: Disaster Recovery & Operations
 
