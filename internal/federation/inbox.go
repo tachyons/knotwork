@@ -3,6 +3,7 @@ package federation
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"knotwork/internal/database"
 	"knotwork/internal/domain"
@@ -25,6 +27,12 @@ type InboxService struct {
 	BaseURL string
 	Key     ed25519.PrivateKey
 	KeyID   string
+	// Replay rejects re-sent signature headers inside its TTL. When nil, the
+	// service lazily creates one on first use.
+	Replay *ReplayCache
+
+	replayOnce  sync.Once
+	replayCache *ReplayCache
 }
 
 type Activity struct {
@@ -81,7 +89,7 @@ func (s *InboxService) handleInbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "federation peer key unavailable", http.StatusForbidden)
 		return
 	}
-	if err := Verify(r, body, pub); err != nil {
+	if err := VerifyWithReplay(r, body, pub, s.replay()); err != nil {
 		s.Log.Warn("federation signature rejected", "peer", peer.Domain, "error", err)
 		http.Error(w, "invalid http signature", http.StatusUnauthorized)
 		return
@@ -163,7 +171,22 @@ func (s *InboxService) actor(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *InboxService) replay() *ReplayCache {
+	s.replayOnce.Do(func() {
+		if s.Replay != nil {
+			s.replayCache = s.Replay
+			return
+		}
+		s.replayCache = NewReplayCache(2 * signatureMaxSkew)
+	})
+	return s.replayCache
+}
+
 func publicKeyPEM(priv ed25519.PrivateKey) string {
 	pub := priv.Public().(ed25519.PublicKey)
-	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub}))
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return ""
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
 }

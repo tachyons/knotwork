@@ -7,56 +7,56 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/subtle"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/superseriousbusiness/httpsig"
 )
 
 const signatureMaxSkew = 5 * time.Minute
 
+// requiredSignedHeaders binds a signature to the request target, authority,
+// freshness, and body. Verification requires all of them even when the sender
+// advertises a different header list.
+var requiredSignedHeaders = []string{"(request-target)", "host", "date", "digest"}
+
 // Sign adds a draft-cavage HTTP Signature to req. body must match req.Body.
 func Sign(req *http.Request, body []byte, key ed25519.PrivateKey, keyID string) error {
-	digest := sha256.Sum256(body)
-	req.Header.Set("Digest", "SHA-256="+base64.StdEncoding.EncodeToString(digest[:]))
 	req.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
+	req.Header.Del("Signature")
 	if req.Host == "" {
 		req.Host = req.URL.Host
 	}
-	headers := []string{"(request-target)", "host", "date", "digest"}
-	signing, err := signingString(req, headers)
+	// Go stores the authority in req.Host and strips the Host header, but the
+	// signer reads every signed value from req.Header. Mirror the authority so
+	// the verifier, which restores Host from req.Host, sees the same string.
+	req.Header.Set("Host", req.Host)
+	signer, _, err := httpsig.NewSigner([]httpsig.Algorithm{httpsig.ED25519}, httpsig.DigestSha256, requiredSignedHeaders, httpsig.Signature, 0)
 	if err != nil {
 		return err
 	}
-	sig := ed25519.Sign(key, []byte(signing))
-	req.Header.Set("Signature", fmt.Sprintf(
-		`keyId=%q,algorithm=%q,headers=%q,signature=%q`,
-		keyID, "ed25519", strings.Join(headers, " "), base64.StdEncoding.EncodeToString(sig)))
-	return nil
+	return signer.SignRequest(key, keyID, req, body)
 }
 
-// Verify checks the Digest, Date, and Ed25519 signature using the peer key.
+// Verify checks that the request covers the required headers, has a fresh
+// Date, has a matching Digest, and carries a valid Ed25519 signature.
 func Verify(req *http.Request, body []byte, pub ed25519.PublicKey) error {
 	if pub == nil {
 		return fmt.Errorf("missing peer public key")
 	}
-	params, err := parseSignatureHeader(req.Header.Get("Signature"))
-	if err != nil {
+	if err := requireSignedHeaders(req); err != nil {
 		return err
-	}
-	if params.algorithm != "" && params.algorithm != "ed25519" {
-		return fmt.Errorf("unsupported signature algorithm %q", params.algorithm)
-	}
-	headers := strings.Fields(params.headers)
-	if len(headers) == 0 {
-		headers = []string{"date"}
-	}
-	if !contains(headers, "digest") {
-		return fmt.Errorf("signature does not cover digest")
 	}
 	date, err := http.ParseTime(req.Header.Get("Date"))
 	if err != nil {
@@ -65,67 +65,71 @@ func Verify(req *http.Request, body []byte, pub ed25519.PublicKey) error {
 	if time.Since(date).Abs() > signatureMaxSkew {
 		return fmt.Errorf("signature date outside allowed skew")
 	}
-	digest := sha256.Sum256(body)
-	want := "SHA-256=" + base64.StdEncoding.EncodeToString(digest[:])
-	if req.Header.Get("Digest") != want {
-		return fmt.Errorf("digest mismatch")
+	if err := verifyDigest(req.Header.Get("Digest"), body); err != nil {
+		return err
 	}
-	signing, err := signingString(req, headers)
+	verifier, err := httpsig.NewVerifier(req)
 	if err != nil {
 		return err
 	}
-	sig, err := base64.StdEncoding.DecodeString(params.signature)
-	if err != nil {
-		return fmt.Errorf("decode signature: %w", err)
-	}
-	if !ed25519.Verify(pub, []byte(signing), sig) {
-		return fmt.Errorf("signature verification failed")
+	if err := verifier.Verify(pub, httpsig.ED25519); err != nil {
+		return fmt.Errorf("signature verification failed: %w", err)
 	}
 	return nil
 }
 
-type signatureParams struct {
-	keyID     string
-	algorithm string
-	headers   string
-	signature string
+func requireSignedHeaders(req *http.Request) error {
+	headers, err := signatureHeaderNames(req.Header.Get("Signature"))
+	if err != nil {
+		return err
+	}
+	for _, required := range requiredSignedHeaders {
+		if !contains(headers, required) {
+			return fmt.Errorf("signature does not cover %s", required)
+		}
+	}
+	return nil
 }
 
-func parseSignatureHeader(raw string) (signatureParams, error) {
-	var out signatureParams
+func signatureHeaderNames(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return out, fmt.Errorf("missing Signature header")
+		return nil, errors.New("missing Signature header")
 	}
+	raw = strings.TrimPrefix(raw, "Signature ")
 	for _, part := range splitParams(raw) {
-		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
-		if len(kv) != 2 {
+		key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
 			continue
 		}
-		key := strings.TrimSpace(kv[0])
-		val := strings.Trim(strings.TrimSpace(kv[1]), `"`)
-		switch key {
-		case "keyId":
-			out.keyID = val
-		case "algorithm":
-			out.algorithm = val
-		case "headers":
-			out.headers = val
-		case "signature":
-			out.signature = val
+		if strings.EqualFold(strings.TrimSpace(key), "headers") {
+			value = strings.Trim(strings.TrimSpace(value), `"`)
+			if value == "" {
+				return nil, errors.New("empty signature headers parameter")
+			}
+			return strings.Fields(value), nil
 		}
 	}
-	if out.keyID == "" || out.signature == "" {
-		return out, fmt.Errorf("incomplete Signature header")
-	}
-	return out, nil
+	return nil, errors.New("signature header has no headers parameter")
 }
 
 func splitParams(raw string) []string {
 	var out []string
 	var current strings.Builder
 	inQuote := false
+	escaped := false
 	for _, r := range raw {
+		if escaped {
+			current.WriteRune(r)
+			escaped = false
+			continue
+		}
 		switch r {
+		case '\\':
+			current.WriteRune(r)
+			if inQuote {
+				escaped = true
+			}
 		case '"':
 			inQuote = !inQuote
 			current.WriteRune(r)
@@ -146,50 +150,130 @@ func splitParams(raw string) []string {
 	return out
 }
 
-func signingString(req *http.Request, headers []string) (string, error) {
-	var lines []string
-	for _, h := range headers {
-		switch h {
-		case "(request-target)":
-			lines = append(lines, "(request-target): "+strings.ToLower(req.Method)+" "+req.URL.RequestURI())
-		case "(created)":
-			lines = append(lines, "(created): "+req.Header.Get("Date"))
-		case "host":
-			host := req.Host
-			if host == "" {
-				host = req.URL.Host
+func verifyDigest(header string, body []byte) error {
+	if header == "" {
+		return errors.New("missing Digest header")
+	}
+	sum := sha256.Sum256(body)
+	want := base64.StdEncoding.EncodeToString(sum[:])
+	for _, part := range strings.Split(header, ",") {
+		algorithm, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(algorithm), "SHA-256") {
+			if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(value)), []byte(want)) == 1 {
+				return nil
 			}
-			lines = append(lines, "host: "+host)
-		default:
-			val := req.Header.Get(h)
-			if val == "" {
-				return "", fmt.Errorf("signature header %q is missing", h)
-			}
-			lines = append(lines, strings.ToLower(h)+": "+val)
+			return errors.New("digest mismatch")
 		}
 	}
-	return strings.Join(lines, "\n"), nil
+	return errors.New("unsupported Digest algorithm")
 }
 
 func contains(list []string, want string) bool {
-	for _, v := range list {
-		if strings.EqualFold(v, want) {
+	for _, value := range list {
+		if strings.EqualFold(value, want) {
 			return true
 		}
 	}
 	return false
 }
 
-// PublicKeyFromPEM parses the PEM form emitted by auth.PublicKeyPEM.
+// ReplayCache records recently verified signatures for a bounded window.
+// Entries are keyed by the full Signature header, which includes the key ID and
+// signature value.
+type ReplayCache struct {
+	mu   sync.Mutex
+	ttl  time.Duration
+	seen map[string]time.Time
+}
+
+// maxReplayEntries bounds cache memory. Only peers holding allowlisted keys can
+// add entries, but a compromised peer must not be able to exhaust the process.
+const maxReplayEntries = 4096
+
+// NewReplayCache returns a cache that remembers signatures for ttl.
+func NewReplayCache(ttl time.Duration) *ReplayCache {
+	if ttl <= 0 {
+		ttl = 2 * signatureMaxSkew
+	}
+	return &ReplayCache{ttl: ttl, seen: make(map[string]time.Time)}
+}
+
+// Seen reports whether key was already observed within the TTL, recording it
+// when it is new. A nil cache never reports a replay.
+func (c *ReplayCache) Seen(key string, now time.Time) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if observed, ok := c.seen[key]; ok && now.Sub(observed) <= c.ttl {
+		return true
+	}
+	if len(c.seen) >= maxReplayEntries {
+		c.evict(now)
+	}
+	c.seen[key] = now
+	return false
+}
+
+// evict drops expired entries and, if the cache is still full, the oldest one.
+func (c *ReplayCache) evict(now time.Time) {
+	for candidate, observed := range c.seen {
+		if now.Sub(observed) > c.ttl {
+			delete(c.seen, candidate)
+		}
+	}
+	if len(c.seen) < maxReplayEntries {
+		return
+	}
+	oldestKey := ""
+	var oldest time.Time
+	for candidate, observed := range c.seen {
+		if oldestKey == "" || observed.Before(oldest) {
+			oldestKey, oldest = candidate, observed
+		}
+	}
+	delete(c.seen, oldestKey)
+}
+
+// VerifyWithReplay verifies a signature and then rejects a replay of the same
+// Signature header within the cache window.
+func VerifyWithReplay(req *http.Request, body []byte, pub ed25519.PublicKey, cache *ReplayCache) error {
+	if err := Verify(req, body, pub); err != nil {
+		return err
+	}
+	if cache == nil {
+		return nil
+	}
+	sum := sha256.Sum256([]byte(req.Header.Get("Signature")))
+	if cache.Seen(hex.EncodeToString(sum[:]), time.Now()) {
+		return errors.New("replayed http signature")
+	}
+	return nil
+}
+
+// PublicKeyFromPEM parses either a SubjectPublicKeyInfo PEM block (the form
+// emitted by auth.PublicKeyPEM) or the legacy raw Ed25519 key bytes in a PEM
+// wrapper.
 func PublicKeyFromPEM(value string) (ed25519.PublicKey, error) {
 	block, _ := pem.Decode([]byte(value))
 	if block == nil {
 		return nil, fmt.Errorf("invalid public key PEM")
 	}
-	if len(block.Bytes) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("invalid Ed25519 public key length")
+	if key, err := x509.ParsePKIXPublicKey(block.Bytes); err == nil {
+		pub, ok := key.(ed25519.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf("PEM contains %T, want an Ed25519 public key", key)
+		}
+		return pub, nil
 	}
-	return ed25519.PublicKey(block.Bytes), nil
+	if len(block.Bytes) == ed25519.PublicKeySize {
+		return ed25519.PublicKey(block.Bytes), nil
+	}
+	return nil, fmt.Errorf("invalid Ed25519 public key length")
 }
 
 // Deliver signs and posts an activity to a remote inbox.

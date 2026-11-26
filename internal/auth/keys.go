@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
@@ -60,9 +61,15 @@ func trimSpaceBytes(b []byte) []byte {
 	return b
 }
 
-// PublicKeyPEM returns the PEM-encoded Ed25519 public key used by federation peers.
+// PublicKeyPEM returns the SubjectPublicKeyInfo PEM encoding of the instance's
+// Ed25519 public key. Peers expect the same format that TLS and SSH tools emit,
+// and federation.PublicKeyFromPEM still accepts the legacy raw-key block.
 func PublicKeyPEM(priv ed25519.PrivateKey) string {
 	pub := priv.Public().(ed25519.PublicKey)
-	block := &pem.Block{Type: "PUBLIC KEY", Bytes: pub}
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return ""
+	}
+	block := &pem.Block{Type: "PUBLIC KEY", Bytes: der}
 	return string(pem.EncodeToMemory(block))
 }
